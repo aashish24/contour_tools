@@ -44,9 +44,9 @@ def extract_smooth_contours(image_path, output_path='smooth_contours.svg'):
             all_smooth_contours.append((smooth_contour, level))
 
     # Save to SVG with different colors for different levels
-    save_contours_to_svg(all_smooth_contours, output_path, img.shape)
+    save_contours_to_svg(all_smooth_contours, output_path, img.shape, reference_image=img)
 
-    return all_smooth_contours
+    return sorted(all_smooth_contours, key=lambda x: x[1], reverse=True)
 
 def smooth_contour_spline(contour, smoothing_factor=0.1):
     """Smooth contour using spline interpolation"""
@@ -104,7 +104,7 @@ def extract_marching_squares_contours(image_path, output_path='marching_squares.
         mask = blurred > 0
         if not np.any(mask):
             return []
-        levels = np.percentile(blurred[mask], [60, 80, 90, 95])
+        levels = np.percentile(blurred[mask], [90, 95, 98])
 
     marching_contours = []
 
@@ -123,25 +123,69 @@ def extract_marching_squares_contours(image_path, output_path='marching_squares.
             marching_contours.append((smooth, level))
 
     if marching_contours:
-        save_contours_to_svg(marching_contours, output_path, img.shape)
+        save_contours_to_svg(marching_contours, output_path, img.shape, reference_image=img)
 
-    return marching_contours
+    return sorted(marching_contours, key=lambda x: x[1], reverse=True)
 
 def save_contours_to_svg(contours_with_levels, output_path, image_shape,
-                         fill_opacity=0.35, stroke_opacity=0.9, stroke_width=1.5,
-                         draw_stroke=True):
-    """Save contours to SVG with filled shapes (and optional stroke)."""
+                         reference_image=None, fill_opacity=0.6, stroke_opacity=0.9,
+                         stroke_width=1.0, draw_stroke=True, sample_shrink_px=3,
+                         sample_radius=5):
+    """Save contours to SVG with filled shapes (optionally matching image colors)."""
     height, width = image_shape[:2]
     dwg = svgwrite.Drawing(output_path, size=(width, height))
 
-    # Nice 6-color set; repeats if needed
+    # Default palette if no image supplied
     colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#F7B267', '#CDB4DB']
 
-    # Draw lower levels first so higher ones sit on top
-    contours_with_levels = sorted(contours_with_levels, key=lambda x: x[1])
+    if reference_image is not None and reference_image.shape[:2] != (height, width):
+        raise ValueError("reference_image shape does not match image_shape")
 
-    for i, (contour, level) in enumerate(contours_with_levels):
-        color = colors[i % len(colors)]
+    def color_from_image(points, fallback_color):
+        if reference_image is None:
+            return fallback_color
+        polygon = np.round(points).astype(np.int32)
+        polygon[:, 0] = np.clip(polygon[:, 0], 0, width - 1)
+        polygon[:, 1] = np.clip(polygon[:, 1], 0, height - 1)
+        mask = np.zeros((height, width), dtype=np.uint8)
+        cv2.fillPoly(mask, [polygon], 255)
+
+        eroded = mask.copy()
+        if sample_shrink_px > 0:
+            kernel_size = sample_shrink_px * 2 + 1
+            kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
+            eroded = cv2.erode(mask, kernel, iterations=1)
+            if not np.count_nonzero(eroded):
+                eroded = mask
+
+        dist = cv2.distanceTransform(eroded, cv2.DIST_L2, 5)
+        _, max_val, _, max_loc = cv2.minMaxLoc(dist)
+
+        if max_val <= 0:
+            region = reference_image[mask == 255]
+            if region.size == 0:
+                return fallback_color
+            mean_bgr = region.mean(axis=0)
+        else:
+            cx, cy = max_loc[0], max_loc[1]
+            x0 = max(cx - sample_radius, 0)
+            x1 = min(cx + sample_radius + 1, width)
+            y0 = max(cy - sample_radius, 0)
+            y1 = min(cy + sample_radius + 1, height)
+            patch = reference_image[y0:y1, x0:x1]
+            patch_mask = eroded[y0:y1, x0:x1]
+            region = patch[patch_mask > 0]
+            if region.size == 0:
+                region = reference_image[mask == 255]
+            mean_bgr = region.mean(axis=0)
+
+        r, g, b = [int(np.clip(c, 0, 255)) for c in mean_bgr[::-1]]
+        return f"#{r:02X}{g:02X}{b:02X}"
+
+    # Draw lower levels first so higher ones sit on top
+    contours_with_levels_sorted = sorted(contours_with_levels, key=lambda x: x[1])
+
+    for i, (contour, level) in enumerate(contours_with_levels_sorted):
         pts = contour.tolist()
         if len(pts) < 3:
             continue
@@ -154,11 +198,14 @@ def save_contours_to_svg(contours_with_levels, output_path, image_shape,
         d.append("Z")
         path_data = " ".join(d)
 
+        fallback = colors[i % len(colors)]
+        fill_color = color_from_image(np.array(pts), fallback)
+
         path = dwg.path(
             d=path_data,
-            fill=color,
+            fill=fill_color,
             fill_opacity=fill_opacity,
-            stroke=color if draw_stroke else 'none',
+            stroke=fill_color if draw_stroke else 'none',
             stroke_opacity=stroke_opacity,
             stroke_width=stroke_width
         )
@@ -230,8 +277,8 @@ def extract_edge_based_contours(image_path, output_path='edge_contours.svg'):
             smooth = smooth_contour_spline(contour, smoothing_factor=0.05)
             smooth_contours.append((smooth, 100))
 
-    save_contours_to_svg(smooth_contours, output_path, img.shape)
-    return smooth_contours
+    save_contours_to_svg(smooth_contours, output_path, img.shape, reference_image=img)
+    return sorted(smooth_contours, key=lambda x: x[1], reverse=True)
 
 # Main execution
 if __name__ == "__main__":
