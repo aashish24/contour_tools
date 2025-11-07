@@ -135,7 +135,7 @@ def extract_edge_based_contours(image_path, output_path='edge_contours.svg'):
     # Filter and smooth
     smooth_contours = []
     for contour in contours:
-        if cv2.contourArea(contour) > 5000:
+        if cv2.contourArea(contour) > 1000:
             smooth = smooth_contour_spline(contour, smoothing_factor=0.05)
             smooth_contours.append((smooth, 100))
 
