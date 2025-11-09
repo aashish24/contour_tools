@@ -282,23 +282,35 @@ def extract_edge_based_contours(image_path, output_path='edge_contours.svg'):
 
 # Main execution
 if __name__ == "__main__":
-    # Try both approaches
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Generate smooth iso-contours and SVGs from a grayscale image.")
+    parser.add_argument("image_path", nargs="?", default="spectrogram.png", help="Input image path (default: spectrogram.png)")
+    parser.add_argument("--smooth-svg", default="smooth_contours.svg", help="Output SVG for multi-level thresholds")
+    parser.add_argument("--edge-svg", default="edge_contours.svg", help="Output SVG for edge-based contours")
+    parser.add_argument("--marching-svg", default="marching_squares_contours.svg", help="Output SVG for marching squares")
+    parser.add_argument("--preview", default="contour_preview.png", help="Output preview image path")
+    args = parser.parse_args()
+
+    image_path = args.image_path
+
     print("Method 1: Multi-level contours")
-    contours1 = extract_smooth_contours('spectrogram.png', 'smooth_contours.svg')
+    contours1 = extract_smooth_contours(image_path, args.smooth_svg)
 
     print("\nMethod 2: Edge-based contours")
-    contours2 = extract_edge_based_contours('spectrogram.png', 'edge_contours.svg')
+    contours2 = extract_edge_based_contours(image_path, args.edge_svg)
 
     print("\nMethod 3: Marching-squares contours")
-    contours3 = extract_marching_squares_contours('spectrogram.png', 'marching_squares_contours.svg')
+    contours3 = extract_marching_squares_contours(image_path, args.marching_svg)
 
-    # Optional: Create a preview image
-    img = cv2.imread('spectrogram.png')
+    img = cv2.imread(image_path)
+    if img is None:
+        raise FileNotFoundError(f"Could not read image at {image_path}")
     preview = img.copy()
 
     # Draw smooth contours on preview
     for contour, level in contours3[:10] if contours3 else contours1[:10]:
         cv2.drawContours(preview, [contour.astype(int)], -1, (0, 255, 0), 2)
 
-    cv2.imwrite('contour_preview.png', preview)
-    print("\nPreview saved to contour_preview.png")
+    cv2.imwrite(args.preview, preview)
+    print(f"\nPreview saved to {args.preview}")
