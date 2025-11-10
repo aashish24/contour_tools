@@ -2,6 +2,12 @@
 
 Generate smooth, color-filled iso-contours from spectrograms or any grayscale raster using OpenCV, SciPy, and scikit-image.
 
+![Input spectrogram](samples/spectrogram.png)
+*Default input (`spectrogram.png`)*  
+
+![Marching-squares output](samples/marching_squares_contours.svg)
+*Sample marching-squares SVG output*
+
 ## Features
 - **Multi-level iso-contours** via OpenCV thresholds with spline smoothing.
 - **Marching-squares contours** powered by `skimage.measure.find_contours`.
@@ -37,13 +43,19 @@ source mydev/bin/activate
 ## Usage
 Place the input raster (default: `spectrogram.png`) in the project root, then run:
 ```bash
-python contour_tools.py
+python contour_tools.py spectrogram.png \
+  --smooth-svg smooth_contours.svg \
+  --edge-svg edge_contours.svg \
+  --marching-svg marching_squares_contours.svg \
+  --preview contour_preview.png
 ```
+
+Omit the arguments to rely on the defaults shown above.
 
 The script executes three contouring pipelines:
 1. **Multi-level thresholds** → `smooth_contours.svg`
 2. **Edge-based contours** → `edge_contours.svg`
-3. **Marching squares** → `marching_squares_contours.svg`
+3. **Marching squares** → `marching_squares_contours.svg` (example shown above)
 
 A preview PNG (`contour_preview.png`) overlays the marching-squares (or fallback multi-level) contours on the original image.
 
