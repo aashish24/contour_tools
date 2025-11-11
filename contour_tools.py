@@ -3,8 +3,10 @@ import numpy as np
 import svgwrite
 from scipy import ndimage
 from skimage import measure
-import matplotlib.pyplot as plt
+from scipy.ndimage import gaussian_filter1d
+from skimage.filters import threshold_multiotsu
 
+# This function extracts smooth contours using a simple thresholding approach.
 def extract_smooth_contours(image_path, output_path='smooth_contours.svg'):
     # Load image
     img = cv2.imread(image_path)
@@ -48,6 +50,7 @@ def extract_smooth_contours(image_path, output_path='smooth_contours.svg'):
 
     return sorted(all_smooth_contours, key=lambda x: x[1], reverse=True)
 
+# This function smooths a contour using spline interpolation.
 def smooth_contour_spline(contour, smoothing_factor=0.1):
     """Smooth contour using spline interpolation"""
     # Reshape contour
@@ -82,6 +85,7 @@ def smooth_contour_spline(contour, smoothing_factor=0.1):
     return smooth_contour
 
 
+# This function computes the area of a polygon.
 def polygon_area(points: np.ndarray) -> float:
     """Return absolute area of a closed polygon given as Nx2 array."""
     if len(points) < 3:
@@ -91,9 +95,141 @@ def polygon_area(points: np.ndarray) -> float:
     return 0.5 * np.abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
 
 
+# This function computes the contour levels based on the selected mode.
+def auto_histogram_levels(data: np.ndarray,
+                          bins: int = 512,
+                          smooth_sigma: float = 2.0,
+                          variance_threshold: float = 400.0,
+                          max_levels: int = 5) -> list[float]:
+    """Select intensity levels by grouping histogram bins until variance exceeds a threshold."""
+    if data.size == 0:
+        return []
+
+    hist, edges = np.histogram(data, bins=bins)
+    counts = gaussian_filter1d(hist.astype(np.float64), sigma=smooth_sigma)
+    centers = (edges[:-1] + edges[1:]) / 2.0
+
+    mask = counts > 0
+    counts = counts[mask]
+    centers = centers[mask]
+
+    if counts.size == 0:
+        return []
+
+    groups = []
+    current_centers = []
+    current_weights = []
+
+    for center, weight in zip(centers, counts):
+        weight = max(float(weight), 1e-9)
+        current_centers.append(center)
+        current_weights.append(weight)
+
+        values = np.array(current_centers, dtype=np.float64)
+        weights = np.array(current_weights, dtype=np.float64)
+        mean = np.average(values, weights=weights)
+        variance = np.average((values - mean) ** 2, weights=weights)
+
+        if variance > variance_threshold and len(current_centers) > 1:
+            last_center = current_centers.pop()
+            last_weight = current_weights.pop()
+
+            values = np.array(current_centers, dtype=np.float64)
+            weights = np.array(current_weights, dtype=np.float64)
+            if weights.sum() > 0:
+                grouped_mean = np.average(values, weights=weights)
+                groups.append(grouped_mean)
+
+            current_centers = [last_center]
+            current_weights = [last_weight]
+
+    if current_centers:
+        values = np.array(current_centers, dtype=np.float64)
+        weights = np.array(current_weights, dtype=np.float64)
+        grouped_mean = np.average(values, weights=weights)
+        groups.append(grouped_mean)
+
+    groups = sorted(set(groups))
+
+    if len(groups) <= 1:
+        return groups
+
+    groups = groups[1:]
+
+    if max_levels is not None and len(groups) > max_levels:
+        indices = np.linspace(0, len(groups) - 1, max_levels, dtype=int)
+        groups = [groups[i] for i in indices]
+
+    def subdivide_high_end(levels: list[float]) -> list[float]:
+        if len(levels) < 2:
+            return levels
+        gaps = np.diff(levels)
+        largest_gap_idx = int(np.argmax(gaps))
+        remaining_slots = max(0, max_levels - len(levels)) if max_levels is not None else len(levels)
+        subdivisions = min(remaining_slots, 2) if remaining_slots > 0 else 0
+        subdivided = []
+        if subdivisions > 0:
+            if largest_gap_idx == len(levels) - 1:
+                low = levels[-2]
+                high = levels[-1]
+                stride = (high - low) / (subdivisions + 1)
+                subdivided = [low + stride * (i + 1) for i in range(subdivisions)]
+                levels = levels[:-1] + subdivided + [levels[-1]]
+        return sorted(levels)
+
+    return subdivide_high_end(groups)
+
+
+def compute_auto_levels(data: np.ndarray,
+                        mode: str,
+                        percentile_values,
+                        multi_otsu_classes: int,
+                        min_intensity: float,
+                        hist_bins: int = 512,
+                        hist_sigma: float = 2.0,
+                        hist_variance_threshold: float = 400.0,
+                        hist_max_levels: int = 5) -> list[float]:
+    """Compute contour levels based on selected mode."""
+    percentile_values = list(percentile_values)
+    percentile_values.sort()
+
+    valid = data[data >= min_intensity]
+    if valid.size == 0:
+        return []
+
+    if mode == 'multi-otsu':
+        try:
+            thresholds = threshold_multiotsu(valid, classes=multi_otsu_classes)
+            return thresholds.tolist()
+        except Exception:
+            # Fallback to simple percentiles if multi-otsu fails
+            if len(percentile_values) == 0:
+                return []
+            return np.percentile(valid, percentile_values).tolist()
+    elif mode == 'histogram':
+        return auto_histogram_levels(valid,
+                                     bins=hist_bins,
+                                     smooth_sigma=hist_sigma,
+                                     variance_threshold=hist_variance_threshold,
+                                     max_levels=hist_max_levels)
+    else:  # percentile mode
+        if len(percentile_values) == 0:
+            return []
+        return np.percentile(valid, percentile_values).tolist()
+
+# This function extracts contours using marching squares (skimage.find_contours).
 def extract_marching_squares_contours(image_path, output_path='marching_squares.svg',
                                       levels=None, gaussian_kernel=(15, 15), gaussian_sigma=3,
-                                      min_area=20000, smoothing_factor=0.08):
+                                      min_area=500, smoothing_factor=0.08,
+                                      levels_mode='percentile',
+                                      percentile_values=(90, 95, 98),
+                                      min_intensity=1.0,
+                                      multi_otsu_classes=4,
+                                      hist_bins=512,
+                                      hist_sigma=2.0,
+                                      hist_variance_threshold=400.0,
+                                      hist_max_levels=5,
+                                      verbose=True):
     """Extract contours using marching squares (skimage.find_contours)."""
     img = cv2.imread(image_path)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -104,7 +240,17 @@ def extract_marching_squares_contours(image_path, output_path='marching_squares.
         mask = blurred > 0
         if not np.any(mask):
             return []
-        levels = np.percentile(blurred[mask], [90, 95, 98])
+        levels = compute_auto_levels(blurred[mask],
+                                     mode=levels_mode,
+                                     percentile_values=percentile_values,
+                                     multi_otsu_classes=multi_otsu_classes,
+                                     min_intensity=min_intensity,
+                                     hist_bins=hist_bins,
+                                     hist_sigma=hist_sigma,
+                                     hist_variance_threshold=hist_variance_threshold,
+                                     hist_max_levels=hist_max_levels)
+        if verbose:
+            print(f"Marching squares levels ({levels_mode}): {levels}")
 
     marching_contours = []
 
@@ -127,6 +273,8 @@ def extract_marching_squares_contours(image_path, output_path='marching_squares.
 
     return sorted(marching_contours, key=lambda x: x[1], reverse=True)
 
+
+# This function saves the contours to an SVG file.
 def save_contours_to_svg(contours_with_levels, output_path, image_shape,
                          reference_image=None, fill_opacity=0.6, stroke_opacity=0.9,
                          stroke_width=1.0, draw_stroke=True, sample_shrink_px=3,
@@ -256,7 +404,8 @@ def save_contours_to_svg(contours_with_levels, output_path, image_shape,
 #     dwg.save()
 #     print(f"Saved smooth contours to {output_path}")
 
-def extract_edge_based_contours(image_path, output_path='edge_contours.svg'):
+# This function extracts contours using edge-based detection.
+def extract_edge_based_contours(image_path, output_path='edge_contours.svg', min_area=500):
     """Alternative approach using Canny edge detection"""
     img = cv2.imread(image_path)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -273,7 +422,7 @@ def extract_edge_based_contours(image_path, output_path='edge_contours.svg'):
     # Filter and smooth
     smooth_contours = []
     for contour in contours:
-        if cv2.contourArea(contour) > 20000:
+        if cv2.contourArea(contour) > min_area:
             smooth = smooth_contour_spline(contour, smoothing_factor=0.05)
             smooth_contours.append((smooth, 100))
 
@@ -290,6 +439,24 @@ if __name__ == "__main__":
     parser.add_argument("--edge-svg", default="edge_contours.svg", help="Output SVG for edge-based contours")
     parser.add_argument("--marching-svg", default="marching_squares_contours.svg", help="Output SVG for marching squares")
     parser.add_argument("--preview", default="contour_preview.png", help="Output preview image path")
+    parser.add_argument("--level-mode", choices=["percentile", "multi-otsu", "histogram"], default="percentile",
+                        help="Strategy for auto-selecting marching-squares contour levels")
+    parser.add_argument("--percentiles", type=float, nargs="+", default=[90, 95, 98],
+                        help="Percentile values for marching-squares levels (used in percentile mode or as fallback)")
+    parser.add_argument("--min-intensity", type=float, default=1.0,
+                        help="Minimum intensity considered when auto-selecting levels")
+    parser.add_argument("--multi-otsu-classes", type=int, default=4,
+                        help="Number of classes when using multi-otsu level selection")
+    parser.add_argument("--hist-bins", type=int, default=512,
+                        help="Number of bins when using histogram level selection")
+    parser.add_argument("--hist-sigma", type=float, default=2.0,
+                        help="Gaussian smoothing sigma for histogram level detection")
+    parser.add_argument("--hist-variance", type=float, default=400.0,
+                        help="Maximum within-group variance before starting a new histogram band")
+    parser.add_argument("--hist-max-levels", type=int, default=5,
+                        help="Maximum number of histogram-derived levels")
+    parser.add_argument("--quiet-levels", action="store_true",
+                        help="Suppress printing of automatically computed levels")
     args = parser.parse_args()
 
     image_path = args.image_path
@@ -298,10 +465,22 @@ if __name__ == "__main__":
     contours1 = extract_smooth_contours(image_path, args.smooth_svg)
 
     print("\nMethod 2: Edge-based contours")
-    contours2 = extract_edge_based_contours(image_path, args.edge_svg)
+    contours2 = extract_edge_based_contours(image_path, output_path=args.edge_svg)
 
     print("\nMethod 3: Marching-squares contours")
-    contours3 = extract_marching_squares_contours(image_path, args.marching_svg)
+    contours3 = extract_marching_squares_contours(
+        image_path,
+        args.marching_svg,
+        levels_mode=args.level_mode,
+        percentile_values=tuple(args.percentiles),
+        min_intensity=args.min_intensity,
+        multi_otsu_classes=args.multi_otsu_classes,
+        hist_bins=args.hist_bins,
+        hist_sigma=args.hist_sigma,
+        hist_variance_threshold=args.hist_variance,
+        hist_max_levels=args.hist_max_levels,
+        verbose=not args.quiet_levels
+    )
 
     img = cv2.imread(image_path)
     if img is None:

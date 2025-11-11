@@ -65,6 +65,10 @@ Edit `contour_tools.py` constants/parameters to tweak behaviour:
 - Minimum area filters to drop noise.
 - Spline smoothing factor.
 - Sampling radius and shrink distance for color extraction.
+- Marching-squares level selection modes:
+  - `--level-mode percentile` (default) with `--percentiles`
+  - `--level-mode multi-otsu` with `--multi-otsu-classes`
+  - `--level-mode histogram` groups histogram bins until the within-band variance exceeds `--hist-variance`; tweak with `--hist-bins`, `--hist-sigma`, `--hist-variance`, `--hist-max-levels`
 
 Each extractor returns contours sorted by descending percentile, while the SVG writer draws them from low to high so higher-value regions stack on top.
 
