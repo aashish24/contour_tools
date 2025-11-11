@@ -68,14 +68,14 @@ Edit `contour_tools.py` constants/parameters to tweak behaviour:
 - Marching-squares level selection modes:
   - `--level-mode percentile` (default) with `--percentiles`
   - `--level-mode multi-otsu` with `--multi-otsu-classes`
-  - `--level-mode histogram` groups histogram bins until the within-band variance exceeds `--hist-variance`; tweak with `--hist-bins`, `--hist-sigma`, `--hist-variance`, `--hist-max-levels`
+  - `--level-mode histogram` groups adjacent histogram bins until the weighted variance exceeds `--hist-variance`, discards the darkest band, and optionally subdivides the brightest band; tune with `--hist-bins`, `--hist-sigma`, `--hist-variance`, `--hist-max-levels`
 
 Each extractor returns contours sorted by descending percentile, while the SVG writer draws them from low to high so higher-value regions stack on top.
 
 ## How It Works
 - **Smoothing**: contours are closed, then `scipy.interpolate.splprep` with `per=True` builds a periodic B-spline; `splev` resamples a smooth polyline. A fallback preserves the raw contour if fitting fails.
 - **Color sampling**: `save_contours_to_svg` erodes the polygon mask, runs a distance transform to find the most interior pixel, samples a small neighbourhood around it, and averages the colors to derive an RGB hex used for both fill and optional stroke.
-- **Marching squares**: `skimage.measure.find_contours` extracts level sets directly from the blurred grayscale image, giving cleaner iso-lines than threshold masks alone.
+- **Marching squares**: `skimage.measure.find_contours` extracts level sets directly from the blurred grayscale image. In histogram mode the pipeline drops the lowest-intensity band, then splits the brightest gap so high-energy ridges receive the densest contour coverage.
 
 ## Development Tips
 - Always re-run the script after parameter tweaks to regenerate SVGs/preview and check color fidelity.
